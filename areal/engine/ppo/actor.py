@@ -454,7 +454,7 @@ def grpo_loss_fn(
         mismatch_abs_logprob_gap_max = torch.max(
             torch.where(
                 mismatch_mask,
-                logprobs.detach().abs() - old_logp.abs(),
+                (logprobs.detach() - old_logp).abs(),
                 torch.tensor(float("-inf"), device=logprobs.device),
             )
         )
