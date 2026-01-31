@@ -439,6 +439,58 @@ def grpo_loss_fn(
         dual_clipped_tokens=stat["dual_clip_mask"],
     )
 
+    mismatch_mask = loss_mask
+    mismatch_count = mismatch_mask.sum().float()
+    if mismatch_count.item() > 0:
+        logp_diff = (logprobs.detach() - old_logp) * mismatch_mask
+        abs_logp_diff = logp_diff.abs()
+        mismatch_abs_diff_mean = abs_logp_diff.sum() / mismatch_count
+        mismatch_diff_mean = logp_diff.sum() / mismatch_count
+        mismatch_k1_mean = mismatch_diff_mean
+        mismatch_k2_mean = (logp_diff.pow(2).sum() / mismatch_count) / 2.0
+        mismatch_k3_mean = (
+            (torch.exp(-logp_diff) - 1.0 + logp_diff).sum() / mismatch_count
+        )
+        mismatch_abs_logprob_gap_max = torch.max(
+            torch.where(
+                mismatch_mask,
+                (logprobs.detach() - old_logp).abs(),
+                torch.tensor(float("-inf"), device=logprobs.device),
+            )
+        )
+        mismatch_diff_threshold = 1.0
+        mismatch_diff_over_threshold_ratio = (
+            (abs_logp_diff > mismatch_diff_threshold).sum() / mismatch_count
+        )
+    else:
+        mismatch_abs_diff_mean = torch.tensor(0.0, device=logprobs.device)
+        mismatch_diff_mean = torch.tensor(0.0, device=logprobs.device)
+        mismatch_k1_mean = torch.tensor(0.0, device=logprobs.device)
+        mismatch_k2_mean = torch.tensor(0.0, device=logprobs.device)
+        mismatch_k3_mean = torch.tensor(0.0, device=logprobs.device)
+        mismatch_abs_logprob_gap_max = torch.tensor(0.0, device=logprobs.device)
+        mismatch_diff_threshold = 1.0
+        mismatch_diff_over_threshold_ratio = torch.tensor(0.0, device=logprobs.device)
+
+    mismatch_scalars = dict(
+        mismatch_abs_diff_mean=mismatch_abs_diff_mean,
+        mismatch_diff_mean=mismatch_diff_mean,
+        mismatch_k1_mean=mismatch_k1_mean,
+        mismatch_k2_mean=mismatch_k2_mean,
+        mismatch_k3_mean=mismatch_k3_mean,
+        mismatch_abs_logprob_gap_max=mismatch_abs_logprob_gap_max,
+        mismatch_diff_threshold=mismatch_diff_threshold,
+        mismatch_diff_over_threshold_ratio=mismatch_diff_over_threshold_ratio,
+    )
+    if "versions" in input_data and current_version is not None:
+        version_gap = (current_version - input_data["versions"]).float()
+        mismatch_scalars["mismatch_version_gap_mean"] = (
+            (version_gap * mismatch_mask).sum() / mismatch_count
+            if mismatch_count > 0
+            else torch.tensor(0.0, device=logprobs.device)
+        )
+    stats_tracker.scalar(**mismatch_scalars)
+
     stats_tracker.stat(
         importance_weight=stat["importance_weight"],
         approx_kl=stat["approx_kl"],
