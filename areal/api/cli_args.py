@@ -957,6 +957,18 @@ class PPOActorConfig(TrainEngineConfig):
             "help": "Filter out tokens where behav_imp_weight exceeds behav_imp_weight_cap when computing loss. Must be > 1.0. use_decoupled_loss must be true."
         },
     )
+    off_policy_sequence_mask_enabled: bool = field(
+        default=False,
+        metadata={
+            "help": "Enable off-policy sequence masking. When enabled, policy-gradient loss terms for negative-advantage tokens are masked out if the sequence-level divergence exceeds off_policy_sequence_mask_delta."
+        },
+    )
+    off_policy_sequence_mask_delta: float = field(
+        default=2.0,
+        metadata={
+            "help": "Sequence-level divergence threshold used by off-policy sequence masking."
+        },
+    )
     importance_sampling_level: str = field(
         default="token",
         metadata={

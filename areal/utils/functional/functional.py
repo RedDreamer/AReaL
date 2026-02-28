@@ -141,6 +141,60 @@ def _compute_sequence_level_ratio_and_advantages(
     return ratio, advantages
 
 
+def compute_off_policy_sequence_mask(
+    old_logprobs: torch.Tensor,
+    logprobs: torch.Tensor,
+    advantages: torch.Tensor,
+    loss_mask: torch.Tensor,
+    delta: float,
+    cu_seqlens: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """Compute per-token off-policy sequence mask.
+
+    A token is masked (set to 0) iff:
+      1) its sequence-level divergence mean(old_logp - cur_logp) over valid response tokens
+         is greater than ``delta``;
+      2) and the token advantage is negative.
+
+    The mask is only meaningful on valid response tokens; invalid positions are set to 0.
+    """
+    seq_log_div = old_logprobs - logprobs
+
+    if seq_log_div.ndim == 1:
+        if cu_seqlens is None:
+            raise ValueError(
+                "cu_seqlens is required for 1D tensors (packed format) when "
+                "computing off-policy sequence masks."
+            )
+        batch_size = cu_seqlens.shape[0] - 1
+        seq_lengths = cu_seqlens[1:] - cu_seqlens[:-1]
+        sequence_idx = torch.arange(
+            batch_size, device=seq_log_div.device
+        ).repeat_interleave(seq_lengths)
+
+        masked_div = torch.where(loss_mask, seq_log_div, 0.0)
+        div_sum_per_seq = torch.zeros(
+            batch_size, device=seq_log_div.device, dtype=seq_log_div.dtype
+        ).scatter_add_(0, sequence_idx, masked_div)
+        valid_count_per_seq = (
+            torch.zeros(batch_size, device=loss_mask.device, dtype=torch.int32)
+            .scatter_add_(0, sequence_idx, loss_mask.int())
+            .clamp(min=1)
+        )
+        seq_div = div_sum_per_seq / valid_count_per_seq.to(seq_log_div.dtype)
+        seq_is_off_policy = seq_div > delta
+        seq_is_off_policy = seq_is_off_policy[sequence_idx]
+    else:
+        valid_count = loss_mask.sum(dim=1).clamp(min=1)
+        seq_div = torch.where(loss_mask, seq_log_div, 0.0).sum(dim=1) / valid_count
+        seq_is_off_policy = seq_div.unsqueeze(1).expand_as(loss_mask)
+
+    should_mask = seq_is_off_policy.logical_and(advantages < 0).logical_and(loss_mask)
+    policy_mask = (~should_mask).to(logprobs.dtype)
+    policy_mask = torch.where(loss_mask, policy_mask, 0.0)
+    return policy_mask
+
+
 def ppo_actor_loss_fn(
     logprobs: torch.Tensor,
     proximal_logprobs: torch.Tensor,
@@ -151,6 +205,8 @@ def ppo_actor_loss_fn(
     eps_clip_higher: float | None = None,
     c_clip: float | None = None,
     behav_imp_weight_cap: float | None = None,
+    off_policy_sequence_mask_enabled: bool = False,
+    off_policy_sequence_mask_delta: float = 2.0,
     importance_sampling_level: str = "token",
     cu_seqlens: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, dict]:
@@ -198,6 +254,19 @@ def ppo_actor_loss_fn(
     pg_loss2 = -advantages * clipped_ratio
     clip_mask = pg_loss1.detach() < pg_loss2.detach()
     pg_loss = torch.max(pg_loss1, pg_loss2)
+
+    off_policy_sequence_mask = None
+    if off_policy_sequence_mask_enabled:
+        off_policy_sequence_mask = compute_off_policy_sequence_mask(
+            old_logprobs=old_logprobs,
+            logprobs=logprobs,
+            advantages=advantages,
+            loss_mask=loss_mask,
+            delta=off_policy_sequence_mask_delta,
+            cu_seqlens=cu_seqlens,
+        )
+        pg_loss = pg_loss * off_policy_sequence_mask
+
     if c_clip is not None:
         assert c_clip > 1.0, c_clip
         pg_loss3 = torch.sign(advantages) * c_clip * advantages
@@ -230,6 +299,8 @@ def ppo_actor_loss_fn(
         stat["behave_imp_weight"] = behav_imp_weight
         stat["behave_approx_kl"] = behav_kl
         stat["behave_mask"] = behav_mask
+    if off_policy_sequence_mask is not None:
+        stat["off_policy_sequence_mask"] = off_policy_sequence_mask
     return pg_loss, stat
 
 

@@ -328,6 +328,8 @@ class PPOActor:
                         eps_clip_higher=self.config.eps_clip_higher,
                         c_clip=self.config.c_clip,
                         behav_imp_weight_cap=self.config.behav_imp_weight_cap,
+                        off_policy_sequence_mask_enabled=self.config.off_policy_sequence_mask_enabled,
+                        off_policy_sequence_mask_delta=self.config.off_policy_sequence_mask_delta,
                         m2_threshold=self.m2_threshold,
                         importance_sampling_level=self.config.importance_sampling_level,
                         current_version=current_version,
@@ -361,6 +363,8 @@ def grpo_loss_fn(
     eps_clip_higher: float | None,
     c_clip: float | None,
     behav_imp_weight_cap: float | None,
+    off_policy_sequence_mask_enabled: bool = False,
+    off_policy_sequence_mask_delta: float = 2.0,
     m2_threshold: float | None = None,
     importance_sampling_level: str = "token",
     current_version: int | None = None,
@@ -423,6 +427,8 @@ def grpo_loss_fn(
             c_clip=c_clip,
             proximal_logprobs=prox_logp,
             behav_imp_weight_cap=behav_imp_weight_cap,
+            off_policy_sequence_mask_enabled=off_policy_sequence_mask_enabled,
+            off_policy_sequence_mask_delta=off_policy_sequence_mask_delta,
             importance_sampling_level=importance_sampling_level,
             cu_seqlens=input_data.get("cu_seqlens"),
         )
@@ -456,6 +462,11 @@ def grpo_loss_fn(
             behave_imp_weight=stat["behave_imp_weight"],
             behave_approx_kl=stat["behave_approx_kl"],
             denominator="unclipped_behave_tokens",
+        )
+    if "off_policy_sequence_mask" in stat:
+        stats_tracker.stat(
+            off_policy_sequence_mask=stat["off_policy_sequence_mask"],
+            denominator="n_valid_tokens",
         )
 
     if vocab_min_logits is not None and vocab_max_logits is not None:
