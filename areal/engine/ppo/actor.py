@@ -287,6 +287,10 @@ class PPOActor:
         scalars = dict(
             mask_no_eos_with_zero=self.config.mask_no_eos_with_zero,
             eps_clip=self.config.eps_clip,
+            off_policy_sequence_mask_enabled=int(
+                self.config.off_policy_sequence_mask_enabled
+            ),
+            off_policy_sequence_mask_delta=self.config.off_policy_sequence_mask_delta,
         )
         if self.config.c_clip is not None:
             scalars["c_clip"] = self.config.c_clip
@@ -464,8 +468,10 @@ def grpo_loss_fn(
             denominator="unclipped_behave_tokens",
         )
     if "off_policy_sequence_mask" in stat:
+        off_policy_mask = stat["off_policy_sequence_mask"]
         stats_tracker.stat(
-            off_policy_sequence_mask=stat["off_policy_sequence_mask"],
+            off_policy_sequence_mask=off_policy_mask,
+            off_policy_mask_ratio=(1.0 - off_policy_mask.float()),
             denominator="n_valid_tokens",
         )
 
