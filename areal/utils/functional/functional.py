@@ -148,7 +148,7 @@ def compute_off_policy_sequence_mask(
     loss_mask: torch.Tensor,
     delta: float,
     cu_seqlens: torch.Tensor | None = None,
-) -> torch.Tensor:
+) -> tuple[torch.Tensor, torch.Tensor]:
     """Compute per-token off-policy sequence mask.
 
     A token is masked (set to 0) iff:
@@ -157,6 +157,11 @@ def compute_off_policy_sequence_mask(
       2) and the token advantage is negative.
 
     The mask is only meaningful on valid response tokens; invalid positions are set to 0.
+
+    Returns:
+        policy_mask: Per-token mask (1 keep, 0 masked) over valid tokens.
+        seq_div: Sequence-level divergence values. Shape [batch] for padded inputs,
+            or [n_sequences] for packed inputs.
     """
     seq_log_div = old_logprobs - logprobs
 
@@ -192,7 +197,7 @@ def compute_off_policy_sequence_mask(
     should_mask = seq_is_off_policy.logical_and(advantages < 0).logical_and(loss_mask)
     policy_mask = (~should_mask).to(logprobs.dtype)
     policy_mask = torch.where(loss_mask, policy_mask, 0.0)
-    return policy_mask
+    return policy_mask, seq_div
 
 
 def ppo_actor_loss_fn(
@@ -257,7 +262,7 @@ def ppo_actor_loss_fn(
 
     off_policy_sequence_mask = None
     if off_policy_sequence_mask_enabled:
-        off_policy_sequence_mask = compute_off_policy_sequence_mask(
+        off_policy_sequence_mask, seq_div = compute_off_policy_sequence_mask(
             old_logprobs=old_logprobs,
             logprobs=logprobs,
             advantages=advantages,
@@ -301,6 +306,9 @@ def ppo_actor_loss_fn(
         stat["behave_mask"] = behav_mask
     if off_policy_sequence_mask is not None:
         stat["off_policy_sequence_mask"] = off_policy_sequence_mask
+        stat["off_policy_seq_div_mean"] = seq_div.float().mean()
+        stat["off_policy_seq_div_max"] = seq_div.float().max()
+        stat["off_policy_seq_div_min"] = seq_div.float().min()
     return pg_loss, stat
 
 

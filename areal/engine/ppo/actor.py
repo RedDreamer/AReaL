@@ -479,6 +479,11 @@ def grpo_loss_fn(
             off_policy_mask_ratio=(1.0 - off_policy_mask.float()),
             denominator="n_valid_tokens",
         )
+        stats_tracker.scalar(
+            off_policy_seq_div_mean=stat["off_policy_seq_div_mean"],
+            off_policy_seq_div_max=stat["off_policy_seq_div_max"],
+            off_policy_seq_div_min=stat["off_policy_seq_div_min"],
+        )
 
     if vocab_min_logits is not None and vocab_max_logits is not None:
         stats_tracker.stat(
