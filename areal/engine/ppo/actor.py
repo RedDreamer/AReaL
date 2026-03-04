@@ -113,10 +113,14 @@ class PPOActor:
             f"  reward_norm: {config.reward_norm if config.reward_norm else 'DISABLED (None)'}"
         )
         logger.info(f"  eps_clip: {config.eps_clip}")
+        off_policy_mask_enabled = getattr(
+            config, "off_policy_sequence_mask_enabled", False
+        )
+        off_policy_mask_delta = getattr(config, "off_policy_sequence_mask_delta", 2.0)
         logger.info(
             "  off_policy_sequence_mask: %s (delta=%.4f)",
-            "ENABLED" if config.off_policy_sequence_mask_enabled else "DISABLED",
-            config.off_policy_sequence_mask_delta,
+            "ENABLED" if off_policy_mask_enabled else "DISABLED",
+            off_policy_mask_delta,
         )
         logger.info("=" * 70)
 
@@ -293,9 +297,11 @@ class PPOActor:
             mask_no_eos_with_zero=self.config.mask_no_eos_with_zero,
             eps_clip=self.config.eps_clip,
             off_policy_sequence_mask_enabled=int(
-                self.config.off_policy_sequence_mask_enabled
+                getattr(self.config, "off_policy_sequence_mask_enabled", False)
             ),
-            off_policy_sequence_mask_delta=self.config.off_policy_sequence_mask_delta,
+            off_policy_sequence_mask_delta=getattr(
+                self.config, "off_policy_sequence_mask_delta", 2.0
+            ),
         )
         if self.config.c_clip is not None:
             scalars["c_clip"] = self.config.c_clip
@@ -337,8 +343,12 @@ class PPOActor:
                         eps_clip_higher=self.config.eps_clip_higher,
                         c_clip=self.config.c_clip,
                         behav_imp_weight_cap=self.config.behav_imp_weight_cap,
-                        off_policy_sequence_mask_enabled=self.config.off_policy_sequence_mask_enabled,
-                        off_policy_sequence_mask_delta=self.config.off_policy_sequence_mask_delta,
+                        off_policy_sequence_mask_enabled=getattr(
+                            self.config, "off_policy_sequence_mask_enabled", False
+                        ),
+                        off_policy_sequence_mask_delta=getattr(
+                            self.config, "off_policy_sequence_mask_delta", 2.0
+                        ),
                         m2_threshold=self.m2_threshold,
                         importance_sampling_level=self.config.importance_sampling_level,
                         current_version=current_version,
