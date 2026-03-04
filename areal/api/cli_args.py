@@ -1017,6 +1017,19 @@ class PPOActorConfig(TrainEngineConfig):
             not self.use_decoupled_loss and self.recompute_logprob
         )
 
+    def __setstate__(self, state: dict):
+        """Backfill fields when loading legacy pickled configs.
+
+        Older checkpoints may deserialize `PPOActorConfig` instances that predate newly
+        added attributes. Ensure new fields always exist with sane defaults.
+        """
+
+        self.__dict__.update(state)
+        if "off_policy_sequence_mask_enabled" not in self.__dict__:
+            self.off_policy_sequence_mask_enabled = False
+        if "off_policy_sequence_mask_delta" not in self.__dict__:
+            self.off_policy_sequence_mask_delta = 2.0
+
 
 @dataclass
 class PPOCriticConfig(TrainEngineConfig):
