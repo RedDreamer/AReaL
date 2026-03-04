@@ -113,6 +113,11 @@ class PPOActor:
             f"  reward_norm: {config.reward_norm if config.reward_norm else 'DISABLED (None)'}"
         )
         logger.info(f"  eps_clip: {config.eps_clip}")
+        logger.info(
+            "  off_policy_sequence_mask: %s (delta=%.4f)",
+            "ENABLED" if config.off_policy_sequence_mask_enabled else "DISABLED",
+            config.off_policy_sequence_mask_delta,
+        )
         logger.info("=" * 70)
 
     @trace_perf("ppo_actor.compute_logp", category="compute")
