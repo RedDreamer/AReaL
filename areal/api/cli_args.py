@@ -957,6 +957,18 @@ class PPOActorConfig(TrainEngineConfig):
             "help": "Filter out tokens where behav_imp_weight exceeds behav_imp_weight_cap when computing loss. Must be > 1.0. use_decoupled_loss must be true."
         },
     )
+    off_policy_sequence_mask_enabled: bool = field(
+        default=False,
+        metadata={
+            "help": "Enable off-policy sequence masking. When enabled, policy-gradient loss terms for negative-advantage tokens are masked out if the sequence-level divergence exceeds off_policy_sequence_mask_delta."
+        },
+    )
+    off_policy_sequence_mask_delta: float = field(
+        default=2.0,
+        metadata={
+            "help": "Sequence-level divergence threshold used by off-policy sequence masking."
+        },
+    )
     importance_sampling_level: str = field(
         default="token",
         metadata={
@@ -1004,6 +1016,19 @@ class PPOActorConfig(TrainEngineConfig):
         return (self.use_decoupled_loss and not method.skips_forward_pass()) or (
             not self.use_decoupled_loss and self.recompute_logprob
         )
+
+    def __setstate__(self, state: dict):
+        """Backfill fields when loading legacy pickled configs.
+
+        Older checkpoints may deserialize `PPOActorConfig` instances that predate newly
+        added attributes. Ensure new fields always exist with sane defaults.
+        """
+
+        self.__dict__.update(state)
+        if "off_policy_sequence_mask_enabled" not in self.__dict__:
+            self.off_policy_sequence_mask_enabled = False
+        if "off_policy_sequence_mask_delta" not in self.__dict__:
+            self.off_policy_sequence_mask_delta = 2.0
 
 
 @dataclass

@@ -28,6 +28,7 @@ from areal.utils.functional import (
     sapo_loss_fn,
 )
 from areal.utils.perf_tracer import trace_perf
+from areal.utils.stats_tracker import ReduceType
 
 logger = logging.getLogger("PPOActor")
 
@@ -113,6 +114,11 @@ class PPOActor:
             f"  reward_norm: {config.reward_norm if config.reward_norm else 'DISABLED (None)'}"
         )
         logger.info(f"  eps_clip: {config.eps_clip}")
+        logger.info(
+            "  off_policy_sequence_mask: %s (delta=%.4f)",
+            "ENABLED" if config.off_policy_sequence_mask_enabled else "DISABLED",
+            config.off_policy_sequence_mask_delta,
+        )
         logger.info("=" * 70)
 
     @trace_perf("ppo_actor.compute_logp", category="compute")
@@ -287,6 +293,10 @@ class PPOActor:
         scalars = dict(
             mask_no_eos_with_zero=self.config.mask_no_eos_with_zero,
             eps_clip=self.config.eps_clip,
+            off_policy_sequence_mask_enabled=int(
+                self.config.off_policy_sequence_mask_enabled
+            ),
+            off_policy_sequence_mask_delta=self.config.off_policy_sequence_mask_delta,
         )
         if self.config.c_clip is not None:
             scalars["c_clip"] = self.config.c_clip
@@ -328,6 +338,8 @@ class PPOActor:
                         eps_clip_higher=self.config.eps_clip_higher,
                         c_clip=self.config.c_clip,
                         behav_imp_weight_cap=self.config.behav_imp_weight_cap,
+                        off_policy_sequence_mask_enabled=self.config.off_policy_sequence_mask_enabled,
+                        off_policy_sequence_mask_delta=self.config.off_policy_sequence_mask_delta,
                         m2_threshold=self.m2_threshold,
                         importance_sampling_level=self.config.importance_sampling_level,
                         current_version=current_version,
@@ -361,6 +373,8 @@ def grpo_loss_fn(
     eps_clip_higher: float | None,
     c_clip: float | None,
     behav_imp_weight_cap: float | None,
+    off_policy_sequence_mask_enabled: bool = False,
+    off_policy_sequence_mask_delta: float = 2.0,
     m2_threshold: float | None = None,
     importance_sampling_level: str = "token",
     current_version: int | None = None,
@@ -423,6 +437,8 @@ def grpo_loss_fn(
             c_clip=c_clip,
             proximal_logprobs=prox_logp,
             behav_imp_weight_cap=behav_imp_weight_cap,
+            off_policy_sequence_mask_enabled=off_policy_sequence_mask_enabled,
+            off_policy_sequence_mask_delta=off_policy_sequence_mask_delta,
             importance_sampling_level=importance_sampling_level,
             cu_seqlens=input_data.get("cu_seqlens"),
         )
@@ -456,6 +472,27 @@ def grpo_loss_fn(
             behave_imp_weight=stat["behave_imp_weight"],
             behave_approx_kl=stat["behave_approx_kl"],
             denominator="unclipped_behave_tokens",
+        )
+    if "off_policy_sequence_mask" in stat:
+        off_policy_mask = stat["off_policy_sequence_mask"]
+        stats_tracker.stat(
+            off_policy_sequence_mask=off_policy_mask,
+            off_policy_mask_ratio=(1.0 - off_policy_mask.float()),
+            denominator="n_valid_tokens",
+        )
+        seq_div = stat["off_policy_seq_div"]
+        stats_tracker.denominator(
+            off_policy_seq_div_valid=torch.ones_like(seq_div, dtype=torch.bool)
+        )
+        stats_tracker.stat(
+            off_policy_seq_div=seq_div.float(),
+            denominator="off_policy_seq_div_valid",
+            reduce_type=ReduceType.COUNT_MEAN_PERCENTILES,
+        )
+        stats_tracker.scalar(
+            off_policy_seq_div_mean=stat["off_policy_seq_div_mean"],
+            off_policy_seq_div_max=stat["off_policy_seq_div_max"],
+            off_policy_seq_div_min=stat["off_policy_seq_div_min"],
         )
 
     if vocab_min_logits is not None and vocab_max_logits is not None:
