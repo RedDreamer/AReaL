@@ -306,6 +306,7 @@ def ppo_actor_loss_fn(
         stat["behave_mask"] = behav_mask
     if off_policy_sequence_mask is not None:
         stat["off_policy_sequence_mask"] = off_policy_sequence_mask
+        stat["off_policy_seq_div"] = seq_div.detach()
         stat["off_policy_seq_div_mean"] = seq_div.float().mean()
         stat["off_policy_seq_div_max"] = seq_div.float().max()
         stat["off_policy_seq_div_min"] = seq_div.float().min()
