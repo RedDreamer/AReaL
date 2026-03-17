@@ -28,6 +28,7 @@ from areal.utils.functional import (
     sapo_loss_fn,
 )
 from areal.utils.perf_tracer import trace_perf
+from areal.utils.stats_tracker import ReduceType
 
 logger = logging.getLogger("PPOActor")
 
@@ -478,6 +479,15 @@ def grpo_loss_fn(
             off_policy_sequence_mask=off_policy_mask,
             off_policy_mask_ratio=(1.0 - off_policy_mask.float()),
             denominator="n_valid_tokens",
+        )
+        seq_div = stat["off_policy_seq_div"]
+        stats_tracker.denominator(
+            off_policy_seq_div_valid=torch.ones_like(seq_div, dtype=torch.bool)
+        )
+        stats_tracker.stat(
+            off_policy_seq_div=seq_div.float(),
+            denominator="off_policy_seq_div_valid",
+            reduce_type=ReduceType.COUNT_MEAN_PERCENTILES,
         )
         stats_tracker.scalar(
             off_policy_seq_div_mean=stat["off_policy_seq_div_mean"],

@@ -21,6 +21,7 @@ class ReduceType(Enum):
     MIN = auto()
     MAX = auto()
     SCALAR = auto()
+    COUNT_MEAN_PERCENTILES = auto()
 
 
 MOE_AUX_LOSSES = {}
@@ -211,6 +212,17 @@ class DistributedStatsTracker:
                 dist.all_reduce(cnt, group=reduce_group)
             result[key] = float(value / cnt)
             result[key + "__count"] = int(cnt)
+        elif reduce_type == ReduceType.COUNT_MEAN_PERCENTILES:
+            count, mean, p50, p90, p95, p99 = self._count_mean_percentiles_of(
+                key, reduce_group
+            )
+            if count is not None:
+                result[f"{key}/count_seq"] = count
+                result[f"{key}/mean_d"] = mean
+                result[f"{key}/p50_d"] = p50
+                result[f"{key}/p90_d"] = p90
+                result[f"{key}/p95_d"] = p95
+                result[f"{key}/p99_d"] = p99
         else:
             raise ValueError(f"Unknown reduce type: {reduce_type}")
 
@@ -287,6 +299,37 @@ class DistributedStatsTracker:
         if torch.isinf(x):
             return None
         return float(x)
+
+    def _count_mean_percentiles_of(self, key, reduce_group):
+        values = self.stats[key]
+        denominator = self.denominators[key]
+        if denominator not in self.stats:
+            raise ValueError(f"Denominator `{denominator}` not set for key `{key}`.")
+
+        per_record_selected: list[torch.Tensor] = []
+        for v, d in zip(values, self.stats[denominator]):
+            selected = v[d]
+            if selected.numel() > 0:
+                per_record_selected.append(selected.detach().reshape(-1).float().cpu())
+
+        if reduce_group is not None:
+            gathered: list[list[torch.Tensor]] = [
+                [] for _ in range(dist.get_world_size(reduce_group))
+            ]
+            dist.all_gather_object(gathered, per_record_selected, group=reduce_group)
+            per_record_selected = [x for rank_vals in gathered for x in rank_vals]
+
+        if not per_record_selected:
+            return None, None, None, None, None, None
+
+        merged = torch.cat(per_record_selected, dim=0)
+        count = int(merged.numel())
+        mean = float(merged.mean())
+        p50 = float(torch.quantile(merged, 0.50))
+        p90 = float(torch.quantile(merged, 0.90))
+        p95 = float(torch.quantile(merged, 0.95))
+        p99 = float(torch.quantile(merged, 0.99))
+        return count, mean, p50, p90, p95, p99
 
 
 DEFAULT_TRACKER = DistributedStatsTracker()
