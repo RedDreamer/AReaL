@@ -2,6 +2,7 @@ import uuid
 from collections.abc import Callable
 from typing import Any
 
+import numpy as np
 import torch
 from transformers import PreTrainedTokenizerFast
 
@@ -172,4 +173,16 @@ class RLVRWorkflow(RolloutWorkflow):
             "attention_mask": torch.ones(len(seq), dtype=torch.bool),
             "rewards": torch.tensor(reward, dtype=torch.float32),
         }
+
+        if resp.routed_experts is not None:
+            routed_experts = np.asarray(resp.routed_experts, dtype=np.int32)
+            seq_len = len(seq)
+            full_routed_shape = (seq_len, *routed_experts.shape[1:])
+            full_routed_experts = np.full(full_routed_shape, -1, dtype=np.int32)
+            copy_len = min(resp.output_len, routed_experts.shape[0])
+            full_routed_experts[resp.input_len : resp.input_len + copy_len] = (
+                routed_experts[:copy_len]
+            )
+            res["routed_experts"] = torch.from_numpy(full_routed_experts)
+
         return {k: v.unsqueeze(0) for k, v in res.items()}

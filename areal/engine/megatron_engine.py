@@ -265,6 +265,10 @@ class MegatronEngine(TrainEngine):
             self.hf_config, self.tf_config = make_hf_and_mcore_config(
                 self.config.path, dtype=self.dtype, bridge=self.bridge
             )
+            if hasattr(self.tf_config, "moe_enable_routing_replay"):
+                self.tf_config.moe_enable_routing_replay = (
+                    self.mcore_config.moe_enable_routing_replay
+                )
 
             if (
                 self.mcore_config.num_layers_in_first_pipeline_stage
@@ -612,6 +616,84 @@ class MegatronEngine(TrainEngine):
     ) -> None:
         self._ensure_ready()
 
+        def _prepare_router_replay_data(
+            routed_experts: torch.Tensor,
+        ) -> list[torch.Tensor] | None:
+            if routed_experts.ndim < 2:
+                raise ValueError(
+                    "routed_experts must have at least 2 dims: [tokens, topk] or "
+                    "[tokens, layers, topk]."
+                )
+
+            # Expected dominant format:
+            # - [num_tokens, topk]  (single-layer MoE)
+            # - [num_tokens, num_layers, topk]
+            # Some backends may return [num_layers, num_tokens, topk].
+            if routed_experts.ndim == 2:
+                routed_experts = routed_experts.unsqueeze(1)
+            elif routed_experts.ndim > 3:
+                routed_experts = routed_experts.reshape(
+                    routed_experts.shape[0], routed_experts.shape[1], -1
+                )
+
+            num_layers = getattr(self.tf_config, "num_layers", None)
+            if (
+                routed_experts.ndim == 3
+                and num_layers is not None
+                and routed_experts.shape[0] == num_layers
+                and routed_experts.shape[1] != num_layers
+            ):
+                routed_experts = routed_experts.permute(1, 0, 2).contiguous()
+
+            replay_data = []
+            for layer_idx in range(routed_experts.shape[1]):
+                layer_routing = routed_experts[:, layer_idx]
+                valid_mask = (layer_routing >= 0).all(dim=-1)
+                layer_routing = layer_routing[valid_mask]
+                if layer_routing.numel() == 0:
+                    continue
+                replay_data.append(
+                    layer_routing.to(
+                        device=current_platform.current_device(), dtype=torch.int32
+                    )
+                )
+
+            return replay_data or None
+
+        def _apply_router_replay_if_needed(mb_input: MicroBatchItem) -> None:
+            if not self.mcore_config.moe_enable_routing_replay:
+                return
+
+            routed_experts = mb_input.padded_mb.get("routed_experts", None)
+            if routed_experts is None:
+                raise RuntimeError(
+                    "moe_enable_routing_replay=True requires routed_experts in the "
+                    "training batch, but none was provided."
+                )
+
+            try:
+                from megatron.core.transformer.moe.router_replay import (
+                    RouterReplay,
+                    RouterReplayAction,
+                    set_global_router_replay_action,
+                )
+            except ImportError as e:
+                raise RuntimeError(
+                    "Failed to import Megatron-Core router replay utilities. "
+                    "Please ensure the installed megatron-core version provides "
+                    "megatron.core.transformer.moe.router_replay."
+                ) from e
+
+            replay_data = _prepare_router_replay_data(routed_experts)
+            if replay_data is None:
+                raise RuntimeError(
+                    "moe_enable_routing_replay=True but routed_experts does not contain "
+                    "any valid replay entries."
+                )
+
+            RouterReplay.set_replay_data(replay_data)
+            set_global_router_replay_action(RouterReplayAction.REPLAY_FORWARD)
+
         def forward_step(batch_iter, model):
             mb_input: MicroBatchItem = next(batch_iter)
 
@@ -639,6 +721,8 @@ class MegatronEngine(TrainEngine):
                     mb_input.padded_mb.update(tree_kwargs)
                     tree_attn_keys = list(tree_kwargs.keys())
 
+            _apply_router_replay_if_needed(mb_input)
+
             output = packed_context_parallel_forward(model, mb_input.padded_mb)
 
             # Release tree attention metadata after forward pass
@@ -651,7 +735,6 @@ class MegatronEngine(TrainEngine):
                     loss = torch.tensor(1.0, device=output_.device)
                 return loss, {}
 
-            model_vp_stage = getattr(model, "vp_stage", 0)
             if mpu.is_pipeline_last_stage(ignore_virtual=False):
                 output = unpad_logits(
                     output,

@@ -6,6 +6,7 @@ from collections.abc import Callable
 from concurrent.futures import Future
 from typing import Any
 
+import numpy as np
 from torchdata.stateful_dataloader import StatefulDataLoader
 
 from areal.api import (
@@ -48,6 +49,33 @@ def _copy_environ():
 class VLLMBackend:
     """vLLM-specific backend implementation for remote inference."""
 
+    @staticmethod
+    def _parse_routed_experts(meta_info: dict[str, Any]) -> np.ndarray | None:
+        """Parse routed expert indices returned by vLLM-Ascend.
+
+        The response format may vary by vLLM/vLLM-Ascend versions:
+        - list[list[int]]
+        - list[int]
+        - bytes-like buffers
+        """
+        routed_experts = meta_info.get("routed_experts", None)
+        if routed_experts is None:
+            return None
+
+        if isinstance(routed_experts, np.ndarray):
+            return routed_experts.astype(np.int32, copy=False)
+
+        if isinstance(routed_experts, (list, tuple)):
+            return np.asarray(routed_experts, dtype=np.int32)
+
+        if isinstance(routed_experts, (bytes, bytearray, memoryview)):
+            return np.frombuffer(routed_experts, dtype=np.int32)
+
+        raise ValueError(
+            "Unexpected routed_experts format from vLLM response. "
+            f"Expected list/tuple/ndarray/bytes-like, got {type(routed_experts).__name__}."
+        )
+
     def build_generation_request(
         self, req: ModelRequest, with_lora: bool, version: int
     ) -> HttpRequest:
@@ -69,6 +97,8 @@ class VLLMBackend:
             "use_beam_search": gconfig.use_beam_search,
             "stream": False,
         }
+        if req.metadata.get("return_routed_experts", False):
+            payload["return_routed_experts"] = True
 
         if with_lora:
             lora_name = gconfig.lora_name
@@ -107,6 +137,7 @@ class VLLMBackend:
         """Parse vLLM generation response."""
         meta_info = response["choices"][0]
         stop_reason = meta_info["finish_reason"]
+        routed_experts = self._parse_routed_experts(meta_info)
 
         # Parse tokens from "token:123" format
         if "tokens" in meta_info["logprobs"]:
@@ -125,11 +156,13 @@ class VLLMBackend:
                 output_tokens=[],
                 output_logprobs=[],
                 stop_reason=stop_reason,
+                routed_experts=routed_experts,
             )
         return HttpGenerationResult(
             output_tokens=output_tokens,
             output_logprobs=output_logprobs,
             stop_reason=stop_reason,
+            routed_experts=routed_experts,
         )
 
     def build_disk_weight_update_requests(

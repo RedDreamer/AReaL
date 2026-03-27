@@ -766,6 +766,12 @@ class MegatronEngineConfig:
         default=False,
         metadata={"help": "Fuse token rearrangement ops during token dispatching."},
     )
+    moe_enable_routing_replay: bool = field(
+        default=False,
+        metadata={
+            "help": "Enable Megatron-Core router replay and force MoE router to use externally provided replay decisions."
+        },
+    )
 
     # FP8 Training Configuration
     fp8_config: FP8EngineConfig | None = None
@@ -1524,7 +1530,12 @@ class SGLangConfig:
     enable_multithread_load: bool = False
 
     # Internal field, not exposed to users.
-    enable_return_routed_experts: bool = False
+    enable_return_routed_experts: bool = field(
+        default=False,
+        metadata={
+            "help": "Enable returning routed expert indices from vLLM for MoE models."
+        },
+    )
 
     # Use staticmethod to make OmegaConf happy.
     @staticmethod

@@ -837,7 +837,7 @@ class RemoteInfEngine(InferenceEngine):
             ):
                 if stop_reason != "abort":  # Only validate for successful generations
                     raise RuntimeError(
-                        "Requested return_routed_experts=True but received None from SGLang. "
+                        "Requested return_routed_experts=True but received None from inference backend. "
                         "This usually means the model is not a MoE (Mixture of Experts) model. "
                         "Please use a MoE model to get routed_experts information."
                     )
